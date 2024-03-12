@@ -1,0 +1,158 @@
+#+TITLE: Thoughts on Applying Hohfeld Analysis to Software Development
+#+AUTHOR: David Sankel
+
+* Abstract
+  Lisa Lippencott's /Hohfeldian Relationships of Trust Localize Reasoning about
+  Lifetime and Thread-Safety Properties/ applies Hohfeldian analysis to
+  reasoning in software development. This paper attempts to identify benefits
+  and drawbacks of this approach and explores the idea of using Hohfeld's
+  concepts in prose contracts.
+* Introduction
+  This is a draft of something that could become a paper one day. There are some
+  known deficiencies:
+
+  1. The introduction lacks a brief introduction to Hohfeld's logic as well as
+     Lisa's rendering of it.
+  2. There is no discussion of right transfer, power, immunity, etc.
+  3. There isn't a discussion of what is lost when using Hohfeld-inspired pros
+     vs. Lisa's full system.
+  4. A conclusion is lacking.
+
+  In spite of these deficiencies, I hope this document will be a useful snapshot
+  of my current thought.
+* Advantages and disadvantages
+  How does Lisa's application of Hohfeld analysis compare to the traditional
+  practice of documenting preconditions and postconditions?
+
+  1. **Improved static analysis**. In common practice, prose is employed when
+     simple expressions are insufficient to express pre- and post-conditions.
+     Unfortunately, adherence to prose contracts cannot be checked with static
+     analysis tooling. Lisa's system, however, offers a way to express many of
+     these complicated conditions in a way that lends itself to static analysis.
+  2. **Improved readability**. Contracts requiring or prohibiting certain past
+     events are awkwardly worded and challenging to grasp. Hohfeld’s terminology
+     potentially makes such contracts easier to understand.
+  3. **Syntactic overhead**. Lisa's application of Hohfeldian notation
+     frequently introduces syntactic overhead, such as function prologues and
+     right/duty naming. This overhead may obscure what a readers are hoping to
+     learn from function documentation. Human language expresses things
+     sometimes more concisely than formal languages can do.
+  4. **Training costs**. Because the system doesn’t build on common practice,
+     there’s a large training overhead to take advantage of it at scale.
+
+* Exploring Hohfeld language in the context of prose contracts
+  Would existing prose contracts be easier to understand if right/duty language
+  were used instead? It's an interesting question because, if affirmative, it
+  could form bridge from today's practice to Lisa's full system. We look at
+  three examples: ~strerror~, ~operator new~, and ~operator delete~.
+
+** ~strerror~
+
+   ~strerror~, a function from the POSIX library, [[https://man7.org/linux/man-pages/man3/strerror.3.html][is documented]] as follows:
+
+   #+begin_src C++
+     char *strerror(int errnum);
+   #+end_src
+
+   #+begin_quote
+   The ~strerror()~ function returns a pointer to a string that describes the error
+   code passed in the argument /errnum/. This string may be modified by a subsequent
+   call to ~strerror()~. No other [posix] library function...will modify this
+   string.
+   #+end_quote
+
+   Shared ownership of the returned string complicates reasoning. Consider the
+   following code:
+
+   #+begin_src C++
+     char * error_string = strerror(error_code);
+     abc::print(error_string);
+   #+end_src
+
+   If ~abc::print~ internally calls ~strerror~ before printing its argument, the
+   writer of this code is in for a surprise. Should any function that may call
+   ~strerror~ in its implementation include that in its contract?
+
+   Here is a rewritten contract for ~strerror~ using Hohfeldian language:
+
+   #+begin_quote
+   The ~strerror()~ function returns a pointer to a string that describes the error
+   code passed in the argument /errnum/. The caller receives the right to stability
+   of this string's value.
+
+   Effect: All prior rights to stability of the contents of the string
+   returned by this function are lost.
+
+   Posix Policy: Posix library functions other than strerror() have the duty to
+   maintain stability of the string's value
+   #+end_quote
+
+   While the fundamental complication of this function remains, the Hohfeldian
+   wording has some benefits. In particular, the effects clause indicates rights
+   are revoked which emphasizes the caller's responsibility to ensure this is
+   safe. Documenting responsibilities explicitly simplifies writing correct
+   code.
+
+** ~operator new~
+
+   ~operator new~ is documented in the [[https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2023/n4944.pdf][C++ working draft]] as follows[fn:: For
+   non-standard allocators the caller potentially receives the duty to call
+   ~delete~ before program exit]:
+
+   #+begin_src C++
+     [[nodiscard]] void* operator new(std::size_t size);
+   #+end_src
+
+   #+begin_quote
+   Effects: Allocate ~size~ bytes of storage.
+
+   Return a non-null pointer to storage, or else throw a bad_alloc exception.
+   #+end_quote
+
+   This contract recast in Hohfeldian language is as follows:
+
+   #+begin_quote
+   Return a non-null pointer with allocation size ~size~ or throw a ~bad_alloc~
+   exception. If returned, the caller receives 1) the right to stability of size
+   bytes starting at the pointer, and 2) the right to deallocate the pointer.
+   #+end_quote
+
+   Note that the Hohfeldian version spells out the caller's right to stability
+   of the allocated memory, but is under no duty to keep it stable. This is
+   unclear in the original wording.
+
+** ~operator delete~
+
+   ~operator delete~'s contract is as follows:
+
+   #+begin_src C++
+     void operator delete( void *ptr, std::size_t size );
+   #+end_src
+
+   #+begin_quote
+   ~ptr~ is... the address of a block of memory allocated by an earlier call to...
+   ~operator new(std::size_t)~... which has not been invalidated by an intervening
+   call to ~operator delete~. [T]he size argument is equal to the size argument
+   passed to the allocation function that returned ~ptr~.
+   #+end_quote
+
+   , and recast in Hohfeldian language,
+
+   #+begin_quote
+   Preconditions:
+   - Caller has the right to deallocate the pointer
+   - ~size~ is the pointer's allocation size
+
+   Effects:
+   - All rights to deallocate the pointer are lost
+   - All rights to the stability of ~size~ bytes pointed to by ~ptr~ are lost
+   #+end_quote
+
+   Similar to the ~strerror~ example, the loss of rights is at the forefront.
+   Additionally, the "intervening" ~operator delete~ language is replaced with a
+   named right to deallocate. Named rights' association with legal terminology
+   may make contracts more relatable.
+
+* Acknowledgments
+  Thanks to Dave Abrahams and Nick DeMarco for conversations that substantially
+  aided and improved this exploration.
